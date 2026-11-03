@@ -25,6 +25,8 @@ jobs:
   android:
     name: Android build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # to attach the APK to a draft release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -37,6 +39,20 @@ jobs:
         with:
           name: kharcha-debug-apk
           path: androidApp/build/outputs/apk/debug/*.apk
+      # Draft releases are visible only to repo collaborators, so the debug APK
+      # is downloadable with one link without being published publicly.
+      - name: Attach APK to draft release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp androidApp/build/outputs/apk/debug/*.apk Kharcha-debug.apk
+          TAG="android-debug-${GITHUB_REF_NAME//\//-}"
+          gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY" || true
+          gh release create "$TAG" Kharcha-debug.apk --draft \
+            --title "Kharcha debug APK ($GITHUB_REF_NAME)" \
+            --notes "Debug build of ${GITHUB_SHA}. Draft release: only visible to repository collaborators." \
+            --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
 
   ios:
     name: iOS build
