@@ -1,0 +1,47 @@
+-- Money columns are *_minor INTEGER (paise). Dates are ISO TEXT 'YYYY-MM-DD'.
+-- Timestamps are epoch millis. Rows are soft-deleted (deleted = 1) so sync can
+-- propagate deletions. Booleans are INTEGER 0/1.
+-- Keep to SQLite 3.18 syntax (Android API 26): no UPSERT, no window functions.
+
+CREATE TABLE account (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    opening_balance_minor INTEGER NOT NULL DEFAULT 0,
+    last4 TEXT,
+    bank_code TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX account_last4 ON account(last4);
+
+insert:
+INSERT INTO account(id, name, type, currency, opening_balance_minor, last4, bank_code, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+selectActive:
+SELECT * FROM account WHERE deleted = 0 AND archived = 0 ORDER BY name COLLATE NOCASE;
+
+selectById:
+SELECT * FROM account WHERE id = ?;
+
+-- Accounts an SMS like "A/c XX1234" from bank HDFC could belong to.
+matchForSms:
+SELECT * FROM account
+WHERE deleted = 0 AND last4 = :last4 AND (bank_code IS NULL OR bank_code = :bankCode);
+
+balance:
+SELECT a.opening_balance_minor + COALESCE((
+    SELECT SUM(l.amount_minor)
+    FROM txn_line l JOIN txn t ON t.id = l.txn_id
+    WHERE t.account_id = a.id AND t.deleted = 0 AND l.deleted = 0
+), 0) AS balance_minor
+FROM account a
+WHERE a.id = ?;
+
+-- SMS without an account number: reuse the bank's placeholder account.
+matchBankOnly:
+SELECT * FROM account WHERE deleted = 0 AND last4 IS NULL AND bank_code IS :bankCode;

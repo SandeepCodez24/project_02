@@ -1,0 +1,39 @@
+-- User-defined rules ("payee contains AMZN -> Shopping"). Highest priority wins.
+CREATE TABLE categorization_rule (
+    id TEXT NOT NULL PRIMARY KEY,
+    match_type TEXT NOT NULL, -- CONTAINS | EQUALS | STARTS_WITH | REGEX
+    pattern TEXT NOT NULL,
+    category_id TEXT NOT NULL REFERENCES category(id),
+    priority INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+);
+
+-- Learned from the user's corrections: normalized merchant -> category.
+CREATE TABLE merchant_memory (
+    merchant TEXT NOT NULL PRIMARY KEY,
+    category_id TEXT NOT NULL REFERENCES category(id),
+    hits INTEGER NOT NULL DEFAULT 1,
+    updated_at INTEGER NOT NULL
+);
+
+insertRule:
+INSERT INTO categorization_rule(id, match_type, pattern, category_id, priority, updated_at)
+VALUES (?, ?, ?, ?, ?, ?);
+
+activeRules:
+SELECT * FROM categorization_rule WHERE deleted = 0 ORDER BY priority DESC;
+
+memoryInsertIfMissing:
+INSERT OR IGNORE INTO merchant_memory(merchant, category_id, hits, updated_at) VALUES (?, ?, 0, ?);
+
+-- Same category again: confidence grows. Different category: the new choice wins, count restarts.
+memoryRecord:
+UPDATE merchant_memory
+SET hits = CASE WHEN category_id = :categoryId THEN hits + 1 ELSE 1 END,
+    category_id = :categoryId,
+    updated_at = :now
+WHERE merchant = :merchant;
+
+allMemory:
+SELECT * FROM merchant_memory;

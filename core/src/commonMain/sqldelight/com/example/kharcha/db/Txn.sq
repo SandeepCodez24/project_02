@@ -1,0 +1,131 @@
+-- A transaction header. Amounts live in txn_line (one or more lines per txn,
+-- which is how splits work). Line amounts are signed: negative = outflow.
+CREATE TABLE txn (
+    id TEXT NOT NULL PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES account(id),
+    occurred_on TEXT NOT NULL,
+    occurred_at INTEGER,
+    payee TEXT,
+    payee_normalized TEXT,
+    note TEXT,
+    source TEXT NOT NULL,
+    external_ref TEXT,
+    transfer_group_id TEXT,
+    needs_review INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX txn_occurred_on ON txn(occurred_on);
+CREATE INDEX txn_account ON txn(account_id, occurred_on);
+-- The same UPI/bank reference can only be imported once per account
+-- (an SMS and an app notification for one payment must not double count).
+CREATE UNIQUE INDEX txn_external_ref ON txn(account_id, external_ref) WHERE external_ref IS NOT NULL;
+
+CREATE TABLE txn_line (
+    id TEXT NOT NULL PRIMARY KEY,
+    txn_id TEXT NOT NULL REFERENCES txn(id),
+    category_id TEXT REFERENCES category(id),
+    amount_minor INTEGER NOT NULL,
+    currency TEXT NOT NULL,
+    memo TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX txn_line_txn ON txn_line(txn_id);
+CREATE INDEX txn_line_category ON txn_line(category_id);
+
+CREATE TABLE tag (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    updated_at INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE txn_line_tag (
+    line_id TEXT NOT NULL REFERENCES txn_line(id),
+    tag_id TEXT NOT NULL REFERENCES tag(id),
+    PRIMARY KEY (line_id, tag_id)
+);
+
+insertTxn:
+INSERT INTO txn(id, account_id, occurred_on, occurred_at, payee, payee_normalized, note, source,
+                external_ref, transfer_group_id, needs_review, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+insertLine:
+INSERT INTO txn_line(id, txn_id, category_id, amount_minor, currency, memo, sort_order, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+insertTagIfMissing:
+INSERT OR IGNORE INTO tag(id, name, updated_at) VALUES (?, ?, ?);
+
+tagIdByName:
+SELECT id FROM tag WHERE name = ? AND deleted = 0;
+
+insertLineTag:
+INSERT OR IGNORE INTO txn_line_tag(line_id, tag_id) VALUES (?, ?);
+
+findByExternalRef:
+SELECT id FROM txn WHERE account_id = ? AND external_ref = ?;
+
+selectById:
+SELECT * FROM txn WHERE id = ? AND deleted = 0;
+
+linesForTxn:
+SELECT * FROM txn_line WHERE txn_id = ? AND deleted = 0 ORDER BY sort_order;
+
+tagsForLine:
+SELECT tag.name FROM tag JOIN txn_line_tag ON txn_line_tag.tag_id = tag.id
+WHERE txn_line_tag.line_id = ? AND tag.deleted = 0
+ORDER BY tag.name;
+
+-- Feed for the home screen: one row per transaction with its total.
+recentWithTotals:
+SELECT t.id, t.account_id, t.occurred_on, t.payee, t.source, t.transfer_group_id, t.needs_review,
+       SUM(l.amount_minor) AS total_minor,
+       MIN(l.currency) AS currency,
+       COUNT(l.id) AS line_count,
+       MIN(l.category_id) AS first_category_id
+FROM txn t JOIN txn_line l ON l.txn_id = t.id AND l.deleted = 0
+WHERE t.deleted = 0
+GROUP BY t.id
+ORDER BY t.occurred_on DESC, t.created_at DESC
+LIMIT :limit;
+
+-- Net spending per category in [from, to). Transfers are excluded.
+-- spent_minor is positive for spending; refunds reduce it.
+spendingByCategory:
+SELECT l.category_id, SUM(-l.amount_minor) AS spent_minor
+FROM txn_line l JOIN txn t ON t.id = l.txn_id
+WHERE t.deleted = 0 AND l.deleted = 0
+  AND t.transfer_group_id IS NULL
+  AND l.currency = :currency
+  AND t.occurred_on >= :fromDate AND t.occurred_on < :toDate
+GROUP BY l.category_id;
+
+-- Per-day, per-category net spending; input for BudgetCalculator.
+dailySpending:
+SELECT l.category_id, t.occurred_on, SUM(-l.amount_minor) AS spent_minor
+FROM txn_line l JOIN txn t ON t.id = l.txn_id
+WHERE t.deleted = 0 AND l.deleted = 0
+  AND t.transfer_group_id IS NULL
+  AND l.category_id IS NOT NULL
+  AND l.currency = :currency
+  AND t.occurred_on >= :fromDate AND t.occurred_on < :toDate
+GROUP BY l.category_id, t.occurred_on;
+
+softDelete:
+UPDATE txn SET deleted = 1, updated_at = :now WHERE id = :id;
+
+softDeleteLines:
+UPDATE txn_line SET deleted = 1, updated_at = :now WHERE txn_id = :txnId;
+
+setLineCategory:
+UPDATE txn_line SET category_id = :categoryId, updated_at = :now WHERE id = :lineId;
+
+markReviewed:
+UPDATE txn SET needs_review = 0, updated_at = :now WHERE id = :id;

@@ -1,0 +1,38 @@
+CREATE TABLE budget (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    -- WEEKLY (param = ISO day-of-week 1..7) | BIWEEKLY (param = anchor date)
+    -- | MONTHLY (param = start day 1..31)
+    period_type TEXT NOT NULL,
+    period_param TEXT NOT NULL,
+    started_on TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE budget_line (
+    id TEXT NOT NULL PRIMARY KEY,
+    budget_id TEXT NOT NULL REFERENCES budget(id),
+    category_id TEXT NOT NULL REFERENCES category(id),
+    allocation_minor INTEGER NOT NULL,
+    rollover TEXT NOT NULL DEFAULT 'NONE', -- NONE | SURPLUS_ONLY | FULL
+    updated_at INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE UNIQUE INDEX budget_line_category ON budget_line(budget_id, category_id) WHERE deleted = 0;
+
+insertBudget:
+INSERT INTO budget(id, name, currency, period_type, period_param, started_on, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+insertLine:
+INSERT INTO budget_line(id, budget_id, category_id, allocation_minor, rollover, updated_at)
+VALUES (?, ?, ?, ?, ?, ?);
+
+selectActive:
+SELECT * FROM budget WHERE deleted = 0 ORDER BY name;
+
+linesForBudget:
+SELECT * FROM budget_line WHERE budget_id = ? AND deleted = 0;
