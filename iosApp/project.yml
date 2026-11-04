@@ -29,9 +29,16 @@ targets:
         SWIFT_VERSION: "5.0"
         FRAMEWORK_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)"
         OTHER_LDFLAGS: "$(inherited) -framework Shared -lsqlite3"
+        # Kotlin targets are iosArm64 + iosSimulatorArm64 (Apple Silicon Macs).
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
     preBuildScripts:
       - name: Compile Kotlin framework
         basedOnDependencyAnalysis: false
         script: |
+          # Xcode doesn't load your shell profile: fall back to Android Studio's
+          # bundled JDK and the default Android SDK location if they aren't set.
+          STUDIO_JBR="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+          if [ -z "$JAVA_HOME" ] && [ -d "$STUDIO_JBR" ]; then export JAVA_HOME="$STUDIO_JBR"; fi
+          if [ -z "$ANDROID_HOME" ] && [ -d "$HOME/Library/Android/sdk" ]; then export ANDROID_HOME="$HOME/Library/Android/sdk"; fi
           cd "$SRCROOT/.."
           ./gradlew :shared:embedAndSignAppleFrameworkForXcode
